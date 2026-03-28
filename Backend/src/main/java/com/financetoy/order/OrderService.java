@@ -1,5 +1,6 @@
 package com.financetoy.order;
 
+import com.financetoy.audit.AuditLogRepository;
 import com.financetoy.audit.AuditLogService;
 import com.financetoy.common.exception.NotFoundException;
 import com.financetoy.execution.ExecutionDecision;
@@ -11,10 +12,18 @@ import com.financetoy.ledger.AccountBalanceRepository;
 import com.financetoy.ledger.LedgerEntry;
 import com.financetoy.ledger.LedgerEntryRepository;
 import com.financetoy.ledger.LedgerEntryType;
+import com.financetoy.order.dto.AuditLogTimelineResponse;
+import com.financetoy.order.dto.LedgerEntryTimelineResponse;
 import com.financetoy.order.dto.OrderCreateRequest;
+import com.financetoy.order.dto.OrderEventTimelineResponse;
+import com.financetoy.order.dto.OrderOperatorDetailResponse;
+import com.financetoy.order.dto.OrderOperatorSummaryResponse;
 import com.financetoy.order.dto.OrderResponse;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,10 +31,17 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class OrderService {
 
+    private static final Set<OrderStatus> PROBLEM_STATUSES = EnumSet.of(
+            OrderStatus.CANCELLED,
+            OrderStatus.COMPENSATED,
+            OrderStatus.RECONCILE_REQUIRED
+    );
+
     private final TradeOrderRepository tradeOrderRepository;
     private final OrderEventRepository orderEventRepository;
     private final AccountBalanceRepository accountBalanceRepository;
     private final LedgerEntryRepository ledgerEntryRepository;
+    private final AuditLogRepository auditLogRepository;
     private final ExecutionSimulator executionSimulator;
     private final AuditLogService auditLogService;
 
@@ -34,6 +50,7 @@ public class OrderService {
             OrderEventRepository orderEventRepository,
             AccountBalanceRepository accountBalanceRepository,
             LedgerEntryRepository ledgerEntryRepository,
+            AuditLogRepository auditLogRepository,
             ExecutionSimulator executionSimulator,
             AuditLogService auditLogService
     ) {
@@ -41,6 +58,7 @@ public class OrderService {
         this.orderEventRepository = orderEventRepository;
         this.accountBalanceRepository = accountBalanceRepository;
         this.ledgerEntryRepository = ledgerEntryRepository;
+        this.auditLogRepository = auditLogRepository;
         this.executionSimulator = executionSimulator;
         this.auditLogService = auditLogService;
     }
@@ -67,9 +85,69 @@ public class OrderService {
 
     @Transactional(readOnly = true)
     public OrderResponse getOrder(String orderId) {
-        TradeOrder order = tradeOrderRepository.findByOrderId(orderId)
-                .orElseThrow(() -> new NotFoundException("주문을 찾을 수 없습니다. orderId=" + orderId));
+        TradeOrder order = findOrder(orderId);
         return toResponse(order);
+    }
+
+    @Transactional(readOnly = true)
+    public List<OrderOperatorSummaryResponse> getOrders(OrderStatus status, FailureMode failureMode, boolean problemOnly, int limit) {
+        int safeLimit = Math.max(1, Math.min(limit, 100));
+
+        return findOrders(status, failureMode).stream()
+                .filter(order -> !problemOnly || isProblem(order.getStatus()))
+                .limit(safeLimit)
+                .map(this::toOperatorSummary)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public OrderOperatorDetailResponse getOrderDetail(String orderId) {
+        TradeOrder order = findOrder(orderId);
+
+        List<OrderEventTimelineResponse> orderEvents = orderEventRepository.findByOrderIdOrderByOccurredAtAsc(orderId).stream()
+                .map(event -> new OrderEventTimelineResponse(
+                        event.getEventType(),
+                        event.getDetail(),
+                        event.getOccurredAt()
+                ))
+                .toList();
+
+        List<LedgerEntryTimelineResponse> ledgerEntries = ledgerEntryRepository.findByOrderIdOrderByCreatedAtAsc(orderId).stream()
+                .map(this::toLedgerTimeline)
+                .toList();
+
+        List<AuditLogTimelineResponse> auditLogs = auditLogRepository.findByDomainTypeAndDomainIdOrderByCreatedAtAsc("ORDER", orderId).stream()
+                .map(log -> new AuditLogTimelineResponse(
+                        log.getActionType(),
+                        log.getDetail(),
+                        log.getCreatedAt()
+                ))
+                .toList();
+
+        return new OrderOperatorDetailResponse(
+                toOperatorSummary(order),
+                orderEvents,
+                ledgerEntries,
+                auditLogs
+        );
+    }
+
+    private List<TradeOrder> findOrders(OrderStatus status, FailureMode failureMode) {
+        if (status != null && failureMode != null) {
+            return tradeOrderRepository.findByStatusAndFailureModeOrderByCreatedAtDesc(status, failureMode);
+        }
+        if (status != null) {
+            return tradeOrderRepository.findByStatusOrderByCreatedAtDesc(status);
+        }
+        if (failureMode != null) {
+            return tradeOrderRepository.findByFailureModeOrderByCreatedAtDesc(failureMode);
+        }
+        return tradeOrderRepository.findAllByOrderByCreatedAtDesc();
+    }
+
+    private TradeOrder findOrder(String orderId) {
+        return tradeOrderRepository.findByOrderId(orderId)
+                .orElseThrow(() -> new NotFoundException("주문을 찾을 수 없습니다. orderId=" + orderId));
     }
 
     private OrderResponse processNewOrder(OrderCreateRequest request, ExperimentRun experimentRun) {
@@ -184,6 +262,17 @@ public class OrderService {
         ));
     }
 
+    private LedgerEntryTimelineResponse toLedgerTimeline(LedgerEntry ledgerEntry) {
+        return new LedgerEntryTimelineResponse(
+                ledgerEntry.getTransactionId(),
+                ledgerEntry.getEntryType(),
+                ledgerEntry.getAmount(),
+                ledgerEntry.getAvailableBalanceAfter(),
+                ledgerEntry.getReservedBalanceAfter(),
+                ledgerEntry.getCreatedAt()
+        );
+    }
+
     private OrderResponse toResponse(TradeOrder order) {
         return new OrderResponse(
                 order.getOrderId(),
@@ -192,5 +281,28 @@ public class OrderService {
                 order.getExecutionResult(),
                 order.getUpdatedAt()
         );
+    }
+
+    private OrderOperatorSummaryResponse toOperatorSummary(TradeOrder order) {
+        return new OrderOperatorSummaryResponse(
+                order.getOrderId(),
+                order.getAccountId(),
+                order.getInstrumentCode(),
+                order.getSide(),
+                order.getQuantity(),
+                order.getPrice(),
+                order.getReservedAmount(),
+                order.getIdempotencyKey(),
+                order.getFailureMode(),
+                order.getStatus(),
+                order.getExecutionResult(),
+                order.getCreatedAt(),
+                order.getUpdatedAt(),
+                isProblem(order.getStatus())
+        );
+    }
+
+    private boolean isProblem(OrderStatus status) {
+        return PROBLEM_STATUSES.contains(status);
     }
 }

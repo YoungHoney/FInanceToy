@@ -37,4 +37,20 @@ public class AuditLog extends BaseTimeEntity {
         this.domainId = domainId;
         this.detail = detail;
     }
+
+    public String getActionType() {
+        return actionType;
+    }
+
+    public String getDomainType() {
+        return domainType;
+    }
+
+    public String getDomainId() {
+        return domainId;
+    }
+
+    public String getDetail() {
+        return detail;
+    }
 }

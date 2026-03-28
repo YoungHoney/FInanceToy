@@ -61,4 +61,32 @@ public class LedgerEntry extends BaseTimeEntity {
         this.availableBalanceAfter = availableBalanceAfter;
         this.reservedBalanceAfter = reservedBalanceAfter;
     }
+
+    public String getTransactionId() {
+        return transactionId;
+    }
+
+    public String getOrderId() {
+        return orderId;
+    }
+
+    public String getAccountId() {
+        return accountId;
+    }
+
+    public LedgerEntryType getEntryType() {
+        return entryType;
+    }
+
+    public BigDecimal getAmount() {
+        return amount;
+    }
+
+    public BigDecimal getAvailableBalanceAfter() {
+        return availableBalanceAfter;
+    }
+
+    public BigDecimal getReservedBalanceAfter() {
+        return reservedBalanceAfter;
+    }
 }

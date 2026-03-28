@@ -146,14 +146,48 @@ class FinanceToyIntegrationTest {
     }
 
     @Test
+    void shouldExposeOperatorOrderFeedAndDetail() throws Exception {
+        mockMvc.perform(post("/api/orders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(orderRequest("ops-normal-001", "NORMAL")))
+                .andExpect(status().isCreated());
+
+        MvcResult delayed = mockMvc.perform(post("/api/orders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(orderRequest("ops-delayed-001", "DELAYED_CALLBACK")))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("RECONCILE_REQUIRED"))
+                .andReturn();
+
+        String delayedOrderId = read(delayed).get("orderId").asText();
+
+        mockMvc.perform(get("/api/orders")
+                        .param("problemOnly", "true")
+                        .param("limit", "10"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].orderId").value(delayedOrderId))
+                .andExpect(jsonPath("$[0].problem").value(true))
+                .andExpect(jsonPath("$[0].status").value("RECONCILE_REQUIRED"));
+
+        mockMvc.perform(get("/api/orders/{orderId}/detail", delayedOrderId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.order.orderId").value(delayedOrderId))
+                .andExpect(jsonPath("$.order.problem").value(true))
+                .andExpect(jsonPath("$.orderEvents.length()").isNumber())
+                .andExpect(jsonPath("$.ledgerEntries.length()").isNumber())
+                .andExpect(jsonPath("$.auditLogs.length()").isNumber())
+                .andExpect(jsonPath("$.orderEvents[0].eventType").value("ORDER_RECEIVED"));
+    }
+
+    @Test
     void shouldStoreExperimentResultsForLaterComparison() throws Exception {
         MvcResult runResult = mockMvc.perform(post("/api/experiments/run")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
-                                  "mode": "NORMAL",
-                                  "tryCount": 2,
-                                  "repeatCount": 2
+                                  \"mode\": \"NORMAL\",
+                                  \"tryCount\": 2,
+                                  \"repeatCount\": 2
                                 }
                                 """))
                 .andExpect(status().isCreated())

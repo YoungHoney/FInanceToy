@@ -21,6 +21,20 @@ async function request(path, options = {}) {
   return payload
 }
 
+function toQueryString(params = {}) {
+  const searchParams = new URLSearchParams()
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === '' || value === null || value === undefined) {
+      return
+    }
+    searchParams.set(key, String(value))
+  })
+
+  const query = searchParams.toString()
+  return query ? `?${query}` : ''
+}
+
 export function createOrder(body) {
   return request('/api/orders', {
     method: 'POST',
@@ -30,6 +44,14 @@ export function createOrder(body) {
 
 export function fetchOrder(orderId) {
   return request(`/api/orders/${orderId}`)
+}
+
+export function fetchOrders(params = {}) {
+  return request(`/api/orders${toQueryString(params)}`)
+}
+
+export function fetchOrderDetail(orderId) {
+  return request(`/api/orders/${orderId}/detail`)
 }
 
 export function runExperiment(body) {

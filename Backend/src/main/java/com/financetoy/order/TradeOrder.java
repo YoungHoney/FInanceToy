@@ -130,8 +130,28 @@ public class TradeOrder extends BaseTimeEntity {
         return accountId;
     }
 
+    public String getInstrumentCode() {
+        return instrumentCode;
+    }
+
+    public OrderSide getSide() {
+        return side;
+    }
+
+    public int getQuantity() {
+        return quantity;
+    }
+
+    public BigDecimal getPrice() {
+        return price;
+    }
+
     public BigDecimal getReservedAmount() {
         return reservedAmount;
+    }
+
+    public String getIdempotencyKey() {
+        return idempotencyKey;
     }
 
     public FailureMode getFailureMode() {
@@ -144,5 +164,9 @@ public class TradeOrder extends BaseTimeEntity {
 
     public String getExecutionResult() {
         return executionResult;
+    }
+
+    public ExperimentRun getExperimentRun() {
+        return experimentRun;
     }
 }

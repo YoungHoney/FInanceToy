@@ -40,4 +40,20 @@ public class OrderEvent {
         this.detail = detail;
         this.occurredAt = LocalDateTime.now();
     }
+
+    public String getOrderId() {
+        return orderId;
+    }
+
+    public OrderEventType getEventType() {
+        return eventType;
+    }
+
+    public String getDetail() {
+        return detail;
+    }
+
+    public LocalDateTime getOccurredAt() {
+        return occurredAt;
+    }
 }
