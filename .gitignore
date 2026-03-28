@@ -23,8 +23,11 @@
 hs_err_pid*
 replay_pid*
 
-
 context/
 .gradle/
 build/
 out/
+Backend/.gradle/
+Backend/build/
+Frontend/node_modules/
+Frontend/dist/
