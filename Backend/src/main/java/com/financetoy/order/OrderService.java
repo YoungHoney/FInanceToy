@@ -71,15 +71,7 @@ public class OrderService {
     @Transactional
     public OrderResponse createOrder(OrderCreateRequest request, ExperimentRun experimentRun) {
         return tradeOrderRepository.findByIdempotencyKey(request.idempotencyKey())
-                .map(existingOrder -> {
-                    auditLogService.record(
-                            "IDEMPOTENT_REPLAY",
-                            "ORDER",
-                            existingOrder.getOrderId(),
-                            "같은 idempotencyKey로 재호출되어 기존 주문을 반환했습니다."
-                    );
-                    return toResponse(existingOrder);
-                })
+                .map(this::toIdempotentReplayResponse)
                 .orElseGet(() -> processNewOrder(request, experimentRun));
     }
 
@@ -150,9 +142,24 @@ public class OrderService {
                 .orElseThrow(() -> new NotFoundException("주문을 찾을 수 없습니다. orderId=" + orderId));
     }
 
+    private OrderResponse toIdempotentReplayResponse(TradeOrder existingOrder) {
+        auditLogService.record(
+                "IDEMPOTENT_REPLAY",
+                "ORDER",
+                existingOrder.getOrderId(),
+                "같은 idempotencyKey로 재호출되어 기존 주문을 반환했습니다."
+        );
+        return toResponse(existingOrder);
+    }
+
     private OrderResponse processNewOrder(OrderCreateRequest request, ExperimentRun experimentRun) {
-        AccountBalance accountBalance = accountBalanceRepository.findByExternalAccountId(request.accountId())
+        AccountBalance accountBalance = accountBalanceRepository.findByExternalAccountIdForUpdate(request.accountId())
                 .orElseThrow(() -> new NotFoundException("계좌를 찾을 수 없습니다. accountId=" + request.accountId()));
+
+        TradeOrder existingOrder = tradeOrderRepository.findByIdempotencyKey(request.idempotencyKey()).orElse(null);
+        if (existingOrder != null) {
+            return toIdempotentReplayResponse(existingOrder);
+        }
 
         BigDecimal reservedAmount = request.price()
                 .multiply(BigDecimal.valueOf(request.quantity()))
@@ -170,7 +177,7 @@ public class OrderService {
                 request.mode(),
                 experimentRun
         );
-        tradeOrderRepository.save(order);
+        tradeOrderRepository.saveAndFlush(order);
         recordEvent(order.getOrderId(), OrderEventType.ORDER_RECEIVED, "주문이 생성되었습니다.");
         auditLogService.record("ORDER_CREATED", "ORDER", order.getOrderId(), "주문 접수가 완료되었습니다.");
 

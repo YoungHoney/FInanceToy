@@ -8,6 +8,7 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
+import java.time.LocalDate;
 
 @Entity
 @Table(name = "reconciliation_job")
@@ -19,6 +20,9 @@ public class ReconciliationJob extends BaseTimeEntity {
 
     @Column(nullable = false, unique = true, length = 100)
     private String jobId;
+
+    @Column(nullable = false, unique = true)
+    private LocalDate businessDate;
 
     @Column(nullable = false)
     private int matchedCount;
@@ -41,6 +45,7 @@ public class ReconciliationJob extends BaseTimeEntity {
 
     public ReconciliationJob(
             String jobId,
+            LocalDate businessDate,
             int matchedCount,
             int mismatchCount,
             int compensatedCount,
@@ -48,6 +53,21 @@ public class ReconciliationJob extends BaseTimeEntity {
             String unresolvedSummary
     ) {
         this.jobId = jobId;
+        this.businessDate = businessDate;
+        this.matchedCount = matchedCount;
+        this.mismatchCount = mismatchCount;
+        this.compensatedCount = compensatedCount;
+        this.unresolvedCount = unresolvedCount;
+        this.unresolvedSummary = unresolvedSummary;
+    }
+
+    public void overwriteResult(
+            int matchedCount,
+            int mismatchCount,
+            int compensatedCount,
+            int unresolvedCount,
+            String unresolvedSummary
+    ) {
         this.matchedCount = matchedCount;
         this.mismatchCount = mismatchCount;
         this.compensatedCount = compensatedCount;
@@ -57,6 +77,10 @@ public class ReconciliationJob extends BaseTimeEntity {
 
     public String getJobId() {
         return jobId;
+    }
+
+    public LocalDate getBusinessDate() {
+        return businessDate;
     }
 
     public int getMatchedCount() {

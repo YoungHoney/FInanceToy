@@ -10,6 +10,7 @@ import com.financetoy.order.OrderStatus;
 import com.financetoy.order.TradeOrder;
 import com.financetoy.order.TradeOrderRepository;
 import com.financetoy.reconciliation.dto.ReconciliationResultResponse;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -42,6 +43,7 @@ public class ReconciliationService {
 
     @Transactional
     public ReconciliationResultResponse run() {
+        LocalDate businessDate = LocalDate.now();
         List<String> unresolvedItems = new ArrayList<>();
         int matchedCount = 0;
         int mismatchCount = 0;
@@ -76,14 +78,33 @@ public class ReconciliationService {
         }
 
         String unresolvedSummary = unresolvedItems.isEmpty() ? "NONE" : String.join("\n", unresolvedItems);
-        ReconciliationJob job = reconciliationJobRepository.save(new ReconciliationJob(
-                UUID.randomUUID().toString(),
-                matchedCount,
-                mismatchCount,
-                compensatedCount,
-                unresolvedCount,
-                unresolvedSummary
-        ));
+        final int finalMatchedCount = matchedCount;
+        final int finalMismatchCount = mismatchCount;
+        final int finalCompensatedCount = compensatedCount;
+        final int finalUnresolvedCount = unresolvedCount;
+        final String finalUnresolvedSummary = unresolvedSummary;
+        ReconciliationJob job = reconciliationJobRepository.findByBusinessDate(businessDate)
+                .map(existingJob -> {
+                    existingJob.overwriteResult(
+                            finalMatchedCount,
+                            finalMismatchCount,
+                            finalCompensatedCount,
+                            finalUnresolvedCount,
+                            finalUnresolvedSummary
+                    );
+                    return existingJob;
+                })
+                .orElseGet(() -> new ReconciliationJob(
+                        UUID.randomUUID().toString(),
+                        businessDate,
+                        finalMatchedCount,
+                        finalMismatchCount,
+                        finalCompensatedCount,
+                        finalUnresolvedCount,
+                        finalUnresolvedSummary
+                ));
+
+        job = reconciliationJobRepository.save(job);
         auditLogService.record("RECONCILIATION_RUN", "RECONCILIATION", job.getJobId(), "배치 대사 실행 완료");
         return toResponse(job);
     }
@@ -102,11 +123,13 @@ public class ReconciliationService {
 
         return new ReconciliationResultResponse(
                 job.getJobId(),
+                job.getBusinessDate(),
                 job.getMatchedCount(),
                 job.getMismatchCount(),
                 job.getCompensatedCount(),
                 job.getUnresolvedCount(),
                 unresolvedItems,
+                job.getUpdatedAt(),
                 job.getCreatedAt()
         );
     }
