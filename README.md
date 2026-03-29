@@ -35,3 +35,13 @@ npm run dev
 
 프론트 개발 서버는 Vite proxy를 통해 백엔드 `/api`를 호출합니다.
 자세한 백엔드 설명은 [Backend/README.md](/mnt/c/Users/SSAFY/Desktop/FInanceToy/Backend/README.md)를 보면 됩니다.
+
+## 테스트 DB
+
+통합 테스트는 H2가 아니라 PostgreSQL 기준으로 실행합니다.
+
+- 컨테이너 기동: `cd Backend && docker compose up -d`
+- 테스트 연결 DB: `financetoy`
+- 테스트 전용 schema: `financetoy_test`
+
+즉, 테스트는 기존 PostgreSQL 컨테이너를 그대로 사용하고, 별도 schema를 분리해서 수행합니다.

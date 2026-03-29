@@ -121,6 +121,10 @@ class FinanceToyIntegrationTest {
 
     @Test
     void shouldCompensateWhenExecutionTimesOut() throws Exception {
+        BigDecimal initialAvailableCash = accountBalanceRepository.findByExternalAccountId(DemoAccounts.DEFAULT_ACCOUNT_ID)
+                .orElseThrow()
+                .getAvailableCash();
+
         MvcResult result = mockMvc.perform(post("/api/orders")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(orderRequest(DemoAccounts.DEFAULT_ACCOUNT_ID, "timeout-001", "TIMEOUT")))
@@ -129,9 +133,16 @@ class FinanceToyIntegrationTest {
                 .andReturn();
 
         String orderId = read(result).get("orderId").asText();
+        AccountBalance balance = accountBalanceRepository.findByExternalAccountId(DemoAccounts.DEFAULT_ACCOUNT_ID).orElseThrow();
 
+        assertThat(tradeOrderRepository.findByOrderId(orderId).orElseThrow().getStatus().name()).isEqualTo("COMPENSATED");
+        assertThat(balance.getAvailableCash()).isEqualByComparingTo(initialAvailableCash);
+        assertThat(balance.getReservedCash()).isEqualByComparingTo("0.00");
         assertThat(ledgerEntryRepository.countByOrderIdAndEntryType(orderId, LedgerEntryType.RESERVE_CASH)).isEqualTo(1);
         assertThat(ledgerEntryRepository.countByOrderIdAndEntryType(orderId, LedgerEntryType.APPLY_COMPENSATION)).isEqualTo(1);
+        assertThat(orderEventCount(orderId, OrderEventType.COMPENSATION_APPLIED)).isEqualTo(1);
+        assertThat(orderEventCount(orderId, OrderEventType.EXECUTION_TIMEOUT)).isEqualTo(1);
+        assertThat(ledgerEntryRepository.countByOrderIdAndEntryType(orderId, LedgerEntryType.RELEASE_CASH)).isEqualTo(0);
     }
 
     @Test
@@ -164,7 +175,7 @@ class FinanceToyIntegrationTest {
     }
 
     @Test
-    void shouldReuseSameReconciliationJobWhenRerunOnSameBusinessDate() throws Exception {
+    void shouldOverwriteExistingReconciliationJobWhenRerunOnSameBusinessDate() throws Exception {
         mockMvc.perform(post("/api/orders")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(orderRequest(DemoAccounts.DEFAULT_ACCOUNT_ID, "delayed-rerun-001", "DELAYED_CALLBACK")))
@@ -173,22 +184,23 @@ class FinanceToyIntegrationTest {
 
         MvcResult firstRun = mockMvc.perform(post("/api/reconciliations/run"))
                 .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.matchedCount").value(0))
+                .andExpect(jsonPath("$.mismatchCount").value(1))
                 .andExpect(jsonPath("$.unresolvedCount").value(1))
                 .andReturn();
 
-        mockMvc.perform(post("/api/orders")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(orderRequest(DemoAccounts.DEFAULT_ACCOUNT_ID, "delayed-rerun-002", "DELAYED_CALLBACK")))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.status").value("RECONCILE_REQUIRED"));
-
         MvcResult secondRun = mockMvc.perform(post("/api/reconciliations/run"))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.unresolvedCount").value(2))
-                .andExpect(jsonPath("$.mismatchCount").value(2))
+                .andExpect(jsonPath("$.matchedCount").value(0))
+                .andExpect(jsonPath("$.mismatchCount").value(1))
+                .andExpect(jsonPath("$.unresolvedCount").value(1))
                 .andReturn();
 
-        assertThat(read(secondRun).get("jobId").asText()).isEqualTo(read(firstRun).get("jobId").asText());
+        JsonNode firstNode = read(firstRun);
+        JsonNode secondNode = read(secondRun);
+
+        assertThat(secondNode.get("jobId").asText()).isEqualTo(firstNode.get("jobId").asText());
+        assertThat(secondNode.get("businessDate").asText()).isEqualTo(firstNode.get("businessDate").asText());
         assertThat(reconciliationJobRepository.count()).isEqualTo(1);
     }
 
@@ -375,5 +387,11 @@ class FinanceToyIntegrationTest {
 
     private JsonNode read(MvcResult result) throws Exception {
         return objectMapper.readTree(result.getResponse().getContentAsString());
+    }
+
+    private long orderEventCount(String orderId, OrderEventType eventType) {
+        return orderEventRepository.findByOrderIdOrderByOccurredAtAsc(orderId).stream()
+                .filter(event -> event.getEventType() == eventType)
+                .count();
     }
 }
