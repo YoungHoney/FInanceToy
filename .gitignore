@@ -32,3 +32,4 @@ Backend/build/
 Frontend/node_modules/
 Frontend/dist/
 Backend/bin/
+Backend/.gradle-user/

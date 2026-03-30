@@ -120,6 +120,49 @@ class FinanceToyIntegrationTest {
     }
 
     @Test
+    void shouldReturnExistingOrderWhenSameIdempotencyKeyIsReusedWithDifferentPayload() throws Exception {
+        String firstBody = orderRequest(DemoAccounts.DEFAULT_ACCOUNT_ID, "idem-002", "NORMAL");
+        Map<String, Object> changedPayload = new LinkedHashMap<>();
+        changedPayload.put("accountId", DemoAccounts.DEFAULT_ACCOUNT_ID);
+        changedPayload.put("instrumentCode", "EQ-CORE-999");
+        changedPayload.put("side", "BUY");
+        changedPayload.put("quantity", 2);
+        changedPayload.put("price", new BigDecimal("2000.00"));
+        changedPayload.put("idempotencyKey", "idem-002");
+        changedPayload.put("mode", "REJECT");
+
+        MvcResult first = mockMvc.perform(post("/api/orders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(firstBody))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("EXECUTED"))
+                .andReturn();
+
+        MvcResult second = mockMvc.perform(post("/api/orders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(changedPayload)))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        JsonNode firstNode = read(first);
+        JsonNode secondNode = read(second);
+        String orderId = firstNode.get("orderId").asText();
+
+        assertThat(secondNode.get("orderId").asText()).isEqualTo(orderId);
+        assertThat(tradeOrderRepository.count()).isEqualTo(1);
+
+        var persistedOrder = tradeOrderRepository.findByOrderId(orderId).orElseThrow();
+        assertThat(persistedOrder.getInstrumentCode()).isEqualTo("EQ-CORE-001");
+        assertThat(persistedOrder.getQuantity()).isEqualTo(1);
+        assertThat(persistedOrder.getPrice()).isEqualByComparingTo("1000.00");
+        assertThat(persistedOrder.getFailureMode()).isEqualTo(FailureMode.NORMAL);
+
+        AccountBalance balance = accountBalanceRepository.findByExternalAccountId(DemoAccounts.DEFAULT_ACCOUNT_ID).orElseThrow();
+        assertThat(balance.getAvailableCash()).isEqualByComparingTo("999000.00");
+        assertThat(balance.getReservedCash()).isEqualByComparingTo("0.00");
+    }
+
+    @Test
     void shouldCompensateWhenExecutionTimesOut() throws Exception {
         BigDecimal initialAvailableCash = accountBalanceRepository.findByExternalAccountId(DemoAccounts.DEFAULT_ACCOUNT_ID)
                 .orElseThrow()
@@ -143,6 +186,63 @@ class FinanceToyIntegrationTest {
         assertThat(orderEventCount(orderId, OrderEventType.COMPENSATION_APPLIED)).isEqualTo(1);
         assertThat(orderEventCount(orderId, OrderEventType.EXECUTION_TIMEOUT)).isEqualTo(1);
         assertThat(ledgerEntryRepository.countByOrderIdAndEntryType(orderId, LedgerEntryType.RELEASE_CASH)).isEqualTo(0);
+    }
+
+    @Test
+    void shouldNotApplyCompensationTwiceWhenTimedOutOrderIsRetriedWithSameIdempotencyKey() throws Exception {
+        String requestBody = orderRequest(DemoAccounts.DEFAULT_ACCOUNT_ID, "timeout-002", "TIMEOUT");
+
+        MvcResult first = mockMvc.perform(post("/api/orders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("COMPENSATED"))
+                .andReturn();
+
+        MvcResult second = mockMvc.perform(post("/api/orders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("COMPENSATED"))
+                .andReturn();
+
+        String orderId = read(first).get("orderId").asText();
+
+        assertThat(read(second).get("orderId").asText()).isEqualTo(orderId);
+        assertThat(tradeOrderRepository.count()).isEqualTo(1);
+        assertThat(ledgerEntryRepository.countByOrderIdAndEntryType(orderId, LedgerEntryType.APPLY_COMPENSATION)).isEqualTo(1);
+        assertThat(orderEventCount(orderId, OrderEventType.COMPENSATION_APPLIED)).isEqualTo(1);
+        assertThat(orderEventCount(orderId, OrderEventType.EXECUTION_TIMEOUT)).isEqualTo(1);
+
+        AccountBalance balance = accountBalanceRepository.findByExternalAccountId(DemoAccounts.DEFAULT_ACCOUNT_ID).orElseThrow();
+        assertThat(balance.getAvailableCash()).isEqualByComparingTo("1000000.00");
+        assertThat(balance.getReservedCash()).isEqualByComparingTo("0.00");
+    }
+
+    @Test
+    void shouldCancelAndReleaseCashWhenExecutionIsRejected() throws Exception {
+        BigDecimal initialAvailableCash = accountBalanceRepository.findByExternalAccountId(DemoAccounts.DEFAULT_ACCOUNT_ID)
+                .orElseThrow()
+                .getAvailableCash();
+
+        MvcResult result = mockMvc.perform(post("/api/orders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(orderRequest(DemoAccounts.DEFAULT_ACCOUNT_ID, "reject-001", "REJECT")))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("CANCELLED"))
+                .andReturn();
+
+        String orderId = read(result).get("orderId").asText();
+        AccountBalance balance = accountBalanceRepository.findByExternalAccountId(DemoAccounts.DEFAULT_ACCOUNT_ID).orElseThrow();
+
+        assertThat(tradeOrderRepository.findByOrderId(orderId).orElseThrow().getStatus().name()).isEqualTo("CANCELLED");
+        assertThat(balance.getAvailableCash()).isEqualByComparingTo(initialAvailableCash);
+        assertThat(balance.getReservedCash()).isEqualByComparingTo("0.00");
+        assertThat(ledgerEntryRepository.countByOrderIdAndEntryType(orderId, LedgerEntryType.RESERVE_CASH)).isEqualTo(1);
+        assertThat(ledgerEntryRepository.countByOrderIdAndEntryType(orderId, LedgerEntryType.RELEASE_CASH)).isEqualTo(1);
+        assertThat(ledgerEntryRepository.countByOrderIdAndEntryType(orderId, LedgerEntryType.EXECUTE_BUY)).isEqualTo(0);
+        assertThat(orderEventCount(orderId, OrderEventType.EXECUTION_REJECTED)).isEqualTo(1);
+        assertThat(orderEventCount(orderId, OrderEventType.ORDER_CANCELLED)).isEqualTo(1);
     }
 
     @Test
